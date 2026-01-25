@@ -55,6 +55,8 @@ typedef struct ri_reg1_s{
 	uint8_t mapq : 6, rev : 1, mapped : 1;
 	char* tags;
 
+	std::vector<std::vector<std::map<uint32_t, uint32_t>>> votes; // votes[chr_index][strand] = map{pos, X votes}
+
 	uint32_t offset;
 
 	ri_chain_s* chains;

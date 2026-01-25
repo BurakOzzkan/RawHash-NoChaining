@@ -153,6 +153,7 @@ bool compare(const std::pair<float, size_t> &left, const std::pair<float, size_t
 	else return false;
 }
 
+// sketching and chaining is done here
 void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l_sig, const uint32_t q_offset, const size_t n_seq, ri_reg1_t* reg, const ri_mapopt_t *opt){
 
 	#ifdef PROFILERH
@@ -227,6 +228,8 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 	#ifdef PROFILERH
 	double seed_t = ri_realtime();
 	#endif
+
+	reg->votes = std::vector<std::vector<std::map<uint32_t, uint32_t>>>(ri->n_seq, std::vector<std::map<uint32_t, uint32_t>>(2));
 	for (i = 0; i < riv.n; ++i) {
 		hashVal = riv.a[i].x>>RI_HASH_SHIFT;
 		pi = (uint32_t)riv.a[i].y>>RI_POS_SHIFT;
@@ -239,7 +242,9 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 
 		for(int s = 0; s < t; ++s){
 			keyval = cr[s];
-			uint32_t t_ind = (uint32_t)(keyval>>RI_ID_SHIFT), target_signal_position = (uint32_t)(keyval>>RI_POS_SHIFT)&mask;
+			uint32_t t_ind = (uint32_t)(keyval>>RI_ID_SHIFT), target_signal_position = (uint32_t)(keyval>>RI_POS_SHIFT)&mask, strand = keyval&1;
+			reg->votes[t_ind][strand][target_signal_position - (pi + q_offset)]++;
+
 			anchors_fr[(keyval&1)][t_ind].emplace_back(ri_anchor_t{target_signal_position,  pi + q_offset});
 			// rh_kv_push(ri_anchor_t, 0, anchors_fr[(keyval&1)][t_ind], ri_anchor_t{target_signal_position, pi + q_offset})
 		}
@@ -369,7 +374,7 @@ void ri_map_frag(const ri_idx_t *ri, const uint32_t s_len, const float *sig, ri_
 	#ifdef PROFILERH
 	double signal_t = ri_realtime();
 	#endif
-	float* events = detect_events(b->km, s_len, sig, opt, &n_events);
+	float* events = detect_events(b->km, s_len, sig, opt, &n_events); // converts raw signals to events
 	#ifdef PROFILERH
 	ri_signaltime += ri_realtime() - signal_t;
 	#endif
@@ -602,7 +607,7 @@ static void *map_worker_pipeline(void *shared, int step, void *in)
 		#endif
         step_mt *s;
         s = (step_mt*)calloc(1, sizeof(step_mt));
-		s->sig = ri_sig_read_frag(p, p->mini_batch_size, &s->n_sig);
+		s->sig = ri_sig_read_frag(p, p->mini_batch_size, &s->n_sig); // s->sig[i] contains the raw signal
 		if (s->n_sig && !p->su_stop) {
 			s->p = p;
 			for (i = 0; i < s->n_sig; ++i)
@@ -665,6 +670,17 @@ static void *map_worker_pipeline(void *shared, int step, void *in)
 		const ri_idx_t *ri = p->ri;
 		for (k = 0; k < s->n_sig; ++k) {
 			if(s->reg[k]){
+
+				// output votes
+				std::cout << s->reg[k]->read_name << "\t" << s->reg[k]->read_length << std::endl;
+				for (int chr = 0; chr < ri->n_seq; chr++) {
+					for (int strand = 0; strand < 2; strand++) {
+						for (auto it = s->reg[k]->votes[chr][strand].begin(); it != s->reg[k]->votes[chr][strand].end(); it++) {
+							std::cout << it->first << " " << it->second << std::endl;
+						}
+					}
+				}
+
 				ri_reg1_t* reg0 = s->reg[k];
 				char strand = reg0->rev?'-':'+';
 				
@@ -702,6 +718,7 @@ int ri_map_file(const ri_idx_t *idx, const char *fn, const ri_mapopt_t *opt, int
 	return ri_map_file_frag(idx, 1, &fn, opt, n_threads);
 }
 
+// initial entry point for mapping
 int ri_map_file_frag(const ri_idx_t *idx, int n_segs, const char **fn, const ri_mapopt_t *opt, int n_threads){
 
 	int pl_threads;
