@@ -474,6 +474,8 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 		reg0->read_id = sig->rid;
 		reg0->ref_id = chains[0].reference_sequence_index;
 		reg0->read_name = sig->name;
+
+		// TODO: reg0->read_length and reg0->read_end_position is the same
 		reg0->read_length = (uint32_t)(read_position_scale * chains[0].anchors[0].query_position);
 		reg0->read_start_position = (uint32_t)(read_position_scale*chains[0].anchors[n_anchors0-1].query_position);
 		reg0->read_end_position = (uint32_t)(read_position_scale * chains[0].anchors[0].query_position);
@@ -671,19 +673,31 @@ static void *map_worker_pipeline(void *shared, int step, void *in)
 		for (k = 0; k < s->n_sig; ++k) {
 			if(s->reg[k]){
 
+				ri_reg1_t* reg0 = s->reg[k];
+				char strand = reg0->rev?'-':'+';
+
+				// TODO: (-) strand may have issues, votes are better in (+) strand, check this
+				int map_end_location_on_reference = reg0->fragment_start_position + reg0->fragment_length;
+				int read_start_location_on_reference = map_end_location_on_reference - reg0->read_end_position;
+				std::cout << "Read name: " << reg0->read_name << "\t" << reg0->read_length << std::endl;
+				std::cout << "True read start location:  " << read_start_location_on_reference << std::endl;
+
 				// output votes
-				std::cout << s->reg[k]->read_name << "\t" << s->reg[k]->read_length << std::endl;
+				const int max_dist = 1000;
+				std::cout << "Votes" << std::endl;
+				
 				for (int chr = 0; chr < ri->n_seq; chr++) {
 					for (int strand = 0; strand < 2; strand++) {
-						for (auto it = s->reg[k]->votes[chr][strand].begin(); it != s->reg[k]->votes[chr][strand].end(); it++) {
-							std::cout << it->first << " " << it->second << std::endl;
+						for (auto it = reg0->votes[chr][strand].begin(); it != reg0->votes[chr][strand].end(); it++) {
+							
+							if (abs(((int) it->first) - read_start_location_on_reference) <= max_dist) {
+								std::cout << "Position on reference: " << it->first << ", votes: " << it->second << std::endl;
+							
+							}
 						}
 					}
 				}
 
-				ri_reg1_t* reg0 = s->reg[k];
-				char strand = reg0->rev?'-':'+';
-				
 				if(reg0->ref_id < ri->n_seq && reg0->read_name){
 					if(reg0->mapped && (!p->su_stop || k < p->su_stop) ){
 						fprintf(stdout, "%s\t%u\t%u\t%u\t%c\t%s\t%u\t%u\t%u\t%u\t%u\t%d\t%s\n", 
