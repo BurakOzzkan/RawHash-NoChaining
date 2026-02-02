@@ -6,6 +6,8 @@
 #include "revent.h"
 #include "sequence_until.h"
 #include <algorithm> //for sort
+#include <cstdint>
+#include <cstdio>
 
 #ifdef PROFILERH
 double ri_filereadtime = 0.0;
@@ -180,31 +182,33 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 	// memset(anchors_f, 0, n_seq*sizeof(rh_kvec_t(ri_anchor_t)));
 	// memset(anchors_r, 0, n_seq*sizeof(rh_kvec_t(ri_anchor_t)));
 
-	std::vector<std::vector<std::vector<ri_anchor_t> > > anchors_fr(2);
-	anchors_fr[0] = std::vector<std::vector<ri_anchor_t> >(n_seq);
-	anchors_fr[1] = std::vector<std::vector<ri_anchor_t> >(n_seq);
-	std::vector<std::vector<ri_anchor_t> > &anchors_f = anchors_fr[0];
-	std::vector<std::vector<ri_anchor_t> > &anchors_r = anchors_fr[1];
+	if (opt->enable_chaining == 1) {
+		// std::vector<std::vector<std::vector<ri_anchor_t> > > anchors_fr(2);
+		// anchors_fr[0] = std::vector<std::vector<ri_anchor_t> >(n_seq);
+		// anchors_fr[1] = std::vector<std::vector<ri_anchor_t> >(n_seq);
+		// std::vector<std::vector<ri_anchor_t> > &anchors_f = anchors_fr[0];
+		// std::vector<std::vector<ri_anchor_t> > &anchors_r = anchors_fr[1];
 
-	// Get anchors in previous chains
-	ri_chain_t* previous_chains = reg->chains;
-	if (reg->n_chains > 0) {
-		for (uint32_t c_ind = 0; c_ind < reg->n_chains; ++c_ind) {
-			int strand = previous_chains[c_ind].strand;
-			uint32_t reference_sequence_index = previous_chains[c_ind].reference_sequence_index;
-			// anchors_fr[strand][reference_sequence_index].reserve(previous_chains[c_ind].n_anchors);
-			anchors_fr[strand][reference_sequence_index].reserve(previous_chains[c_ind].n_anchors);
-			// rh_kv_resize(ri_anchor_t, 0, anchors_fr[strand][reference_sequence_index], anchors_fr[strand][reference_sequence_index].n + previous_chains[c_ind].n_anchors)
-			for (uint32_t a_ind = 0; a_ind < previous_chains[c_ind].n_anchors; ++a_ind) {
-				anchors_fr[strand][reference_sequence_index].emplace_back(previous_chains[c_ind].anchors[a_ind]);
-				// rh_kv_push(ri_anchor_t, 0, anchors_fr[strand][reference_sequence_index], previous_chains[c_ind].anchors[a_ind]);
-			}
-		}
-	}
-
-	if(reg->chains){
-		for(uint32_t i = 0; i < reg->n_chains; ++i) if(reg->chains[i].anchors) ri_kfree(km, reg->chains[i].anchors);
-		ri_kfree(km, reg->chains); reg->n_chains = 0;
+		// // Get anchors in previous chains
+		// ri_chain_t* previous_chains = reg->chains;
+		// if (reg->n_chains > 0) {
+		// 	for (uint32_t c_ind = 0; c_ind < reg->n_chains; ++c_ind) {
+		// 		int strand = previous_chains[c_ind].strand;
+		// 		uint32_t reference_sequence_index = previous_chains[c_ind].reference_sequence_index;
+		// 		// anchors_fr[strand][reference_sequence_index].reserve(previous_chains[c_ind].n_anchors);
+		// 		anchors_fr[strand][reference_sequence_index].reserve(previous_chains[c_ind].n_anchors);
+		// 		// rh_kv_resize(ri_anchor_t, 0, anchors_fr[strand][reference_sequence_index], anchors_fr[strand][reference_sequence_index].n + previous_chains[c_ind].n_anchors)
+		// 		for (uint32_t a_ind = 0; a_ind < previous_chains[c_ind].n_anchors; ++a_ind) {
+		// 			anchors_fr[strand][reference_sequence_index].emplace_back(previous_chains[c_ind].anchors[a_ind]);
+		// 			// rh_kv_push(ri_anchor_t, 0, anchors_fr[strand][reference_sequence_index], previous_chains[c_ind].anchors[a_ind]);
+		// 		}
+		// 	}
+		// }
+		
+		// if(reg->chains){
+		// 	for(uint32_t i = 0; i < reg->n_chains; ++i) if(reg->chains[i].anchors) ri_kfree(km, reg->chains[i].anchors);
+		// 	ri_kfree(km, reg->chains); reg->n_chains = 0;
+		// }
 	}
 
 	#ifdef PROFILERH
@@ -229,7 +233,9 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 	double seed_t = ri_realtime();
 	#endif
 
-	reg->votes = std::vector<std::vector<std::map<uint32_t, uint32_t>>>(ri->n_seq, std::vector<std::map<uint32_t, uint32_t>>(2));
+	// TODO: may have issues with fragments (threading) and sorting
+	// TODO: (-) strand may have issues, votes are better in (+) strand, check this
+	int Nb = ri->seq[reg->ref_id].len / opt->bin_size + 1;
 	for (i = 0; i < riv.n; ++i) {
 		hashVal = riv.a[i].x>>RI_HASH_SHIFT;
 		pi = (uint32_t)riv.a[i].y>>RI_POS_SHIFT;
@@ -243,9 +249,28 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 		for(int s = 0; s < t; ++s){
 			keyval = cr[s];
 			uint32_t t_ind = (uint32_t)(keyval>>RI_ID_SHIFT), target_signal_position = (uint32_t)(keyval>>RI_POS_SHIFT)&mask, strand = keyval&1;
-			reg->votes[t_ind][strand][target_signal_position - (pi + q_offset)]++;
+			
+			if (opt->mode == 0) {
+				reg->votes[t_ind][strand][target_signal_position - (pi + q_offset)]++;
 
-			anchors_fr[(keyval&1)][t_ind].emplace_back(ri_anchor_t{target_signal_position,  pi + q_offset});
+				if (reg->votes[t_ind][strand][target_signal_position - (pi + q_offset)] >= opt->h_votes) reg->on_target = 1;
+			} else {
+				uint32_t bin; // bins are calculated based on the start position of the read on the reference genome
+				if (target_signal_position < pi + q_offset) bin = 0;
+				else bin = (target_signal_position - (pi + q_offset)) / opt->bin_size;
+				if (bin >= Nb) std::cerr << "ERROR: bin out of range: " << bin << " target_signal_position: " << target_signal_position << " pi: " << pi << " q_offset: " << q_offset << " bin_size: " << opt->bin_size << " Nb: " << Nb << std::endl;
+				
+				// I have reviewed a sample output and pi + q_offset (location of the anchor on the query) seems sorted in ascending order for a read, so I believe the overlap calculation below is correct
+				uint32_t overlap = (uint32_t) std::max(0, (ri->k + reg->last_hit_pos[t_ind][strand][bin]) - ((int)(pi + q_offset)) );
+				reg->last_hit_pos[t_ind][strand][bin] = pi + q_offset;
+				reg->bp_counts[t_ind][strand][bin] += ri->k - overlap;
+				
+				if (reg->bp_counts[t_ind][strand][bin] >= opt->h_bins) reg->on_target = 1;
+			}
+
+			if (opt->enable_chaining == 1) {
+				// anchors_fr[(keyval&1)][t_ind].emplace_back(ri_anchor_t{target_signal_position,  pi + q_offset});
+			}
 			// rh_kv_push(ri_anchor_t, 0, anchors_fr[(keyval&1)][t_ind], ri_anchor_t{target_signal_position, pi + q_offset})
 		}
 	}
@@ -260,103 +285,105 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 	chain_t = ri_realtime();
 	#endif
 
-	// Sort the anchors based on their occurrence on target signal
-	for (size_t t_ind = 0; t_ind < n_seq; ++t_ind) {
-		// std::sort(anchors_f[t_ind].a, anchors_f[t_ind].a + anchors_f[t_ind].n);
-		// std::sort(anchors_r[t_ind].a, anchors_r[t_ind].a + anchors_r[t_ind].n);
-		std::sort(anchors_f[t_ind].begin(), anchors_f[t_ind].end());
-		std::sort(anchors_r[t_ind].begin(), anchors_r[t_ind].end());
-	}
+	if (opt->enable_chaining == 1) {
+		// // Sort the anchors based on their occurrence on target signal
+		// for (size_t t_ind = 0; t_ind < n_seq; ++t_ind) {
+		// 	// std::sort(anchors_f[t_ind].a, anchors_f[t_ind].a + anchors_f[t_ind].n);
+		// 	// std::sort(anchors_r[t_ind].a, anchors_r[t_ind].a + anchors_r[t_ind].n);
+		// 	std::sort(anchors_f[t_ind].begin(), anchors_f[t_ind].end());
+		// 	std::sort(anchors_r[t_ind].begin(), anchors_r[t_ind].end());
+		// }
 
 
-	// Chaining DP done on each individual target signal
-	float max_chaining_score = 0;  // std::numeric_limits<float>::min();
-	std::vector<ri_chain_t> chains;
-	for (size_t target_signal_index = 0; target_signal_index < n_seq; ++target_signal_index) {
-		for (int strand_i = 0; strand_i < 2; ++strand_i) {
-			std::vector<float> chaining_scores;
-			chaining_scores.reserve(anchors_fr[strand_i][target_signal_index].size());
-			std::vector<size_t> chaining_predecessors;
-			chaining_predecessors.reserve(anchors_fr[strand_i][target_signal_index].size());
-			std::vector<bool> anchor_is_used;
-			anchor_is_used.reserve(anchors_fr[strand_i][target_signal_index].size());
-			std::vector<std::pair<float, size_t> > end_anchor_index_chaining_scores;
-			end_anchor_index_chaining_scores.reserve(10);
-			for (size_t anchor_index = 0; anchor_index < anchors_fr[strand_i][target_signal_index].size(); ++anchor_index) {
-				float distance_coefficient = 1; /*- 0.2 * anchors_fr[strand_i][target_signal_index][anchor_index].distance / search_radius;*/
-				chaining_scores.emplace_back(distance_coefficient * ri->e);
-				chaining_predecessors.emplace_back(anchor_index);
-				anchor_is_used.push_back(false);
-				int32_t current_anchor_target_position = anchors_fr[strand_i][target_signal_index][anchor_index].target_position;
-				int32_t current_anchor_query_position = anchors_fr[strand_i][target_signal_index][anchor_index].query_position;
-				int32_t start_anchor_index = 0;
-				if (anchor_index > (size_t)chaining_band_length) start_anchor_index = anchor_index - chaining_band_length;
+		// // Chaining DP done on each individual target signal
+		// float max_chaining_score = 0;  // std::numeric_limits<float>::min();
+		// std::vector<ri_chain_t> chains;
+		// for (size_t target_signal_index = 0; target_signal_index < n_seq; ++target_signal_index) {
+		// 	for (int strand_i = 0; strand_i < 2; ++strand_i) {
+		// 		std::vector<float> chaining_scores;
+		// 		chaining_scores.reserve(anchors_fr[strand_i][target_signal_index].size());
+		// 		std::vector<size_t> chaining_predecessors;
+		// 		chaining_predecessors.reserve(anchors_fr[strand_i][target_signal_index].size());
+		// 		std::vector<bool> anchor_is_used;
+		// 		anchor_is_used.reserve(anchors_fr[strand_i][target_signal_index].size());
+		// 		std::vector<std::pair<float, size_t> > end_anchor_index_chaining_scores;
+		// 		end_anchor_index_chaining_scores.reserve(10);
+		// 		for (size_t anchor_index = 0; anchor_index < anchors_fr[strand_i][target_signal_index].size(); ++anchor_index) {
+		// 			float distance_coefficient = 1; /*- 0.2 * anchors_fr[strand_i][target_signal_index][anchor_index].distance / search_radius;*/
+		// 			chaining_scores.emplace_back(distance_coefficient * ri->e);
+		// 			chaining_predecessors.emplace_back(anchor_index);
+		// 			anchor_is_used.push_back(false);
+		// 			int32_t current_anchor_target_position = anchors_fr[strand_i][target_signal_index][anchor_index].target_position;
+		// 			int32_t current_anchor_query_position = anchors_fr[strand_i][target_signal_index][anchor_index].query_position;
+		// 			int32_t start_anchor_index = 0;
+		// 			if (anchor_index > (size_t)chaining_band_length) start_anchor_index = anchor_index - chaining_band_length;
 
-				int32_t previous_anchor_index = anchor_index - 1;
-				int32_t num_skips = 0;
-				for (; previous_anchor_index >= start_anchor_index; --previous_anchor_index) {
-					int32_t previous_anchor_target_position = anchors_fr[strand_i][target_signal_index][previous_anchor_index].target_position;
-					int32_t previous_anchor_query_position = anchors_fr[strand_i][target_signal_index][previous_anchor_index].query_position;
+		// 			int32_t previous_anchor_index = anchor_index - 1;
+		// 			int32_t num_skips = 0;
+		// 			for (; previous_anchor_index >= start_anchor_index; --previous_anchor_index) {
+		// 				int32_t previous_anchor_target_position = anchors_fr[strand_i][target_signal_index][previous_anchor_index].target_position;
+		// 				int32_t previous_anchor_query_position = anchors_fr[strand_i][target_signal_index][previous_anchor_index].query_position;
 
-					if (previous_anchor_query_position == current_anchor_query_position) continue;
-					if (previous_anchor_target_position == current_anchor_target_position) continue;
-					if (previous_anchor_target_position + max_target_gap_length < current_anchor_target_position) break;
+		// 				if (previous_anchor_query_position == current_anchor_query_position) continue;
+		// 				if (previous_anchor_target_position == current_anchor_target_position) continue;
+		// 				if (previous_anchor_target_position + max_target_gap_length < current_anchor_target_position) break;
 
-					int32_t target_position_diff = current_anchor_target_position - previous_anchor_target_position;
-					assert(target_position_diff > 0);
-					int32_t query_position_diff = current_anchor_query_position - previous_anchor_query_position;
-					float current_chaining_score = 0;
+		// 				int32_t target_position_diff = current_anchor_target_position - previous_anchor_target_position;
+		// 				assert(target_position_diff > 0);
+		// 				int32_t query_position_diff = current_anchor_query_position - previous_anchor_query_position;
+		// 				float current_chaining_score = 0;
 
-					if (query_position_diff < 0) continue;
-					
-					float matching_dimensions = std::min(std::min(target_position_diff, query_position_diff), ri->e) * distance_coefficient;
-					int gap_length = std::abs(target_position_diff - query_position_diff);
-					float gap_scale = target_position_diff > 0? (float)query_position_diff / target_position_diff: 1;
-					// float gap_cost = 0;
-					// if (gap_length != 0) {
-					if (gap_length < max_gap_length && gap_scale < 5 && gap_scale > 0.75) {
-						current_chaining_score = chaining_scores[previous_anchor_index] + matching_dimensions;  // - gap_cost;
-					}
+		// 				if (query_position_diff < 0) continue;
+						
+		// 				float matching_dimensions = std::min(std::min(target_position_diff, query_position_diff), ri->e) * distance_coefficient;
+		// 				int gap_length = std::abs(target_position_diff - query_position_diff);
+		// 				float gap_scale = target_position_diff > 0? (float)query_position_diff / target_position_diff: 1;
+		// 				// float gap_cost = 0;
+		// 				// if (gap_length != 0) {
+		// 				if (gap_length < max_gap_length && gap_scale < 5 && gap_scale > 0.75) {
+		// 					current_chaining_score = chaining_scores[previous_anchor_index] + matching_dimensions;  // - gap_cost;
+		// 				}
 
-					if (current_chaining_score > chaining_scores[anchor_index]) {
-						chaining_scores[anchor_index] = current_chaining_score;
-						chaining_predecessors[anchor_index] = previous_anchor_index;
-						--num_skips;
-					} else {
-						++num_skips;
-						if (num_skips > max_num_skips) break;
-					}
-				}
-				// Update chain with max score
-				if (chaining_scores[anchor_index] > max_chaining_score) {
-					max_chaining_score = chaining_scores[anchor_index];
-				}
-				if (chaining_scores.back() >= min_chaining_score &&
-					chaining_scores.back() > max_chaining_score / 2) {
-					end_anchor_index_chaining_scores.emplace_back(chaining_scores.back(), anchor_index);
-				}
-			}
-			// Sort a vector of <end anchor index, chaining score>
-			std::sort(end_anchor_index_chaining_scores.begin(), end_anchor_index_chaining_scores.end(), compare);
-			// Traceback all reg->chains from higest score to lowest
-			for (size_t anchor_index = 0; anchor_index < end_anchor_index_chaining_scores.size() && anchor_index < (size_t)num_best_chains; ++anchor_index) {
-				traceback_chains(km, min_num_anchors, strand_i, end_anchor_index_chaining_scores[anchor_index].second, target_signal_index, chaining_scores, 
-								 chaining_predecessors, anchors_fr[strand_i], anchor_is_used, chains);
+		// 				if (current_chaining_score > chaining_scores[anchor_index]) {
+		// 					chaining_scores[anchor_index] = current_chaining_score;
+		// 					chaining_predecessors[anchor_index] = previous_anchor_index;
+		// 					--num_skips;
+		// 				} else {
+		// 					++num_skips;
+		// 					if (num_skips > max_num_skips) break;
+		// 				}
+		// 			}
+		// 			// Update chain with max score
+		// 			if (chaining_scores[anchor_index] > max_chaining_score) {
+		// 				max_chaining_score = chaining_scores[anchor_index];
+		// 			}
+		// 			if (chaining_scores.back() >= min_chaining_score &&
+		// 				chaining_scores.back() > max_chaining_score / 2) {
+		// 				end_anchor_index_chaining_scores.emplace_back(chaining_scores.back(), anchor_index);
+		// 			}
+		// 		}
+		// 		// Sort a vector of <end anchor index, chaining score>
+		// 		std::sort(end_anchor_index_chaining_scores.begin(), end_anchor_index_chaining_scores.end(), compare);
+		// 		// Traceback all reg->chains from higest score to lowest
+		// 		for (size_t anchor_index = 0; anchor_index < end_anchor_index_chaining_scores.size() && anchor_index < (size_t)num_best_chains; ++anchor_index) {
+		// 			traceback_chains(km, min_num_anchors, strand_i, end_anchor_index_chaining_scores[anchor_index].second, target_signal_index, chaining_scores, 
+		// 							chaining_predecessors, anchors_fr[strand_i], anchor_is_used, chains);
 
-				if (chaining_scores[end_anchor_index_chaining_scores[anchor_index].second] < max_chaining_score / 2) break;
-			}
-		}
-	}
+		// 			if (chaining_scores[end_anchor_index_chaining_scores[anchor_index].second] < max_chaining_score / 2) break;
+		// 		}
+		// 	}
+		// }
 
-	if (chains.size() > 0) {
-		// Generate primary reg->chains
-		gen_primary_chains(km, chains);
-		// Compute MAPQ
-		comp_mapq(chains);
+		// if (chains.size() > 0) {
+		// 	// Generate primary reg->chains
+		// 	gen_primary_chains(km, chains);
+		// 	// Compute MAPQ
+		// 	comp_mapq(chains);
 
-		reg->n_chains = chains.size();
-		reg->chains = (ri_chain_t*)ri_kmalloc(km, chains.size()*sizeof(ri_chain_t));
-		std::copy(chains.begin(), chains.end(), reg->chains);
+		// 	reg->n_chains = chains.size();
+		// 	reg->chains = (ri_chain_t*)ri_kmalloc(km, chains.size()*sizeof(ri_chain_t));
+		// 	std::copy(chains.begin(), chains.end(), reg->chains);
+		// }
 	}
 
 	#ifdef PROFILERH
@@ -399,6 +426,16 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 	ri_reg1_t* reg0 = s->reg[i];
 	ri_sig_t* sig = s->sig[i];
 
+	reg0->on_target = 0;
+	int Nb = s->p->ri->seq[reg0->ref_id].len / opt->bin_size + 1;
+	if (opt->mode == 0) {
+		// votes
+		reg0->votes = std::vector<std::vector<std::map<uint32_t, uint32_t>>>(s->p->ri->n_seq, std::vector<std::map<uint32_t, uint32_t>>(2));
+	} else {
+		// bins
+		reg0->bp_counts = std::vector<std::vector<std::vector<uint32_t>>>(s->p->ri->n_seq, std::vector<std::vector<uint32_t>>(2, std::vector<uint32_t>(Nb, 0)));
+		reg0->last_hit_pos = std::vector<std::vector<std::vector<int>>>(s->p->ri->n_seq, std::vector<std::vector<int>>(2, std::vector<int>(Nb, -(s->p->ri->k))));
+	}
 	uint32_t l_chunk = opt->chunk_size;
 	uint32_t max_chunk =  opt->max_num_chunk;
 	uint32_t qlen = sig->l_sig;
@@ -413,17 +450,19 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 
 		ri_map_frag(s->p->ri, (const uint32_t)s_qe-s_qs, (const float*)&(sig->sig[s_qs]), reg0, b, opt, sig->name);
 		
-		if (reg0->n_chains >= 2) {
-			if (reg0->chains[0].score / reg0->chains[1].score >= opt->min_bestmap_ratio) break;
-
-			float mean_chain_score = 0;
-			for (uint32_t c_ind = 0; c_ind < reg0->n_chains; ++c_ind)
-				mean_chain_score += reg0->chains[c_ind].score;
-
-			mean_chain_score /= reg0->n_chains;
-			if (reg0->chains[0].score >= opt->min_meanmap_ratio * mean_chain_score) break;
-		} else if (reg0->n_chains == 1 && reg0->chains[0].n_anchors >= opt->min_chain_anchor){
-			break;
+		if (opt->enable_chaining == 1) {
+			if (reg0->n_chains >= 2) {
+				if (reg0->chains[0].score / reg0->chains[1].score >= opt->min_bestmap_ratio) break;
+	
+				float mean_chain_score = 0;
+				for (uint32_t c_ind = 0; c_ind < reg0->n_chains; ++c_ind)
+					mean_chain_score += reg0->chains[c_ind].score;
+	
+				mean_chain_score /= reg0->n_chains;
+				if (reg0->chains[0].score >= opt->min_meanmap_ratio * mean_chain_score) break;
+			} else if (reg0->n_chains == 1 && reg0->chains[0].n_anchors >= opt->min_chain_anchor){
+				break;
+			}
 		}
 	} double mapping_time = ri_realtime() - t;
 
@@ -431,66 +470,25 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 	ri_maptime += mapping_time;
 	#endif
 
-	if (c_count > 0 && (s_qs >= qlen || c_count == max_chunk)) --c_count;
+	if (opt->enable_chaining == 1) {
+		if (c_count > 0 && (s_qs >= qlen || c_count == max_chunk)) --c_count;
 
-	float read_position_scale = ((float)(c_count+1)*l_chunk/reg0->offset) / ((float)opt->sample_rate/opt->bp_per_sec);
-	// Save results in vector and output PAF
-	
-	ri_chain_s* chains = reg0->chains;
+		float read_position_scale = ((float)(c_count+1)*l_chunk/reg0->offset) / ((float)opt->sample_rate/opt->bp_per_sec);
+		// Save results in vector and output PAF
+		
+		ri_chain_s* chains = reg0->chains;
 
-	if(!chains) {reg0->n_chains = 0;}
+		if(!chains) {reg0->n_chains = 0;}
 
-	uint32_t n_anchors0 = (reg0->n_chains)?chains[0].n_anchors:0;
-	float mean_chain_score = 0;
-	for (uint32_t c_ind = 0; c_ind < reg0->n_chains; ++c_ind)
-		mean_chain_score += chains[c_ind].score;
+		uint32_t n_anchors0 = (reg0->n_chains)?chains[0].n_anchors:0;
+		float mean_chain_score = 0;
+		for (uint32_t c_ind = 0; c_ind < reg0->n_chains; ++c_ind)
+			mean_chain_score += chains[c_ind].score;
 
-	mean_chain_score /= reg0->n_chains;
-	if (n_anchors0 > 0 && ((reg0->n_chains >= 2 && (chains[0].score / chains[1].score >= opt->min_bestmap_ratio_out || 
-											   chains[0].score >= opt->min_meanmap_ratio_out * mean_chain_score)) ||
-						(reg0->n_chains == 1 && n_anchors0 >= opt->min_chain_anchor_out))) {
-		float anchor_ref_gap_avg_length = 0;
-		float anchor_read_gap_avg_length = 0;
-		for (size_t ai = 0; ai < n_anchors0; ++ai) {
-			if (ai < n_anchors0 - 1) {
-				anchor_ref_gap_avg_length += chains[0].anchors[ai].target_position - chains[0].anchors[ai + 1].target_position;
-				anchor_read_gap_avg_length += chains[0].anchors[ai].query_position - chains[0].anchors[ai + 1].query_position;
-			}
-		}
-		anchor_ref_gap_avg_length /= n_anchors0;
-		anchor_read_gap_avg_length /= n_anchors0;
-		std::string tags;
-		tags.append("mt:f:" + std::to_string(mapping_time * 1000));
-		tags.append("\tci:i:" + std::to_string(c_count + 1));
-		tags.append("\tsl:i:" + std::to_string(qlen));
-		tags.append("\tcm:i:" + std::to_string(n_anchors0));
-		tags.append("\tnc:i:" + std::to_string(reg0->n_chains));
-		tags.append("\ts1:f:" + std::to_string(chains[0].score));
-		tags.append("\ts2:f:" + std::to_string(reg0->n_chains > 1 ? chains[1].score : 0));
-		tags.append("\tsm:f:" + std::to_string(mean_chain_score));
-		tags.append("\tat:f:" + std::to_string((float)anchor_ref_gap_avg_length));
-		tags.append("\taq:f:" + std::to_string((float)anchor_read_gap_avg_length));
-
-		reg0->read_id = sig->rid;
-		reg0->ref_id = chains[0].reference_sequence_index;
-		reg0->read_name = sig->name;
-
-		// TODO: reg0->read_length and reg0->read_end_position is the same
-		reg0->read_length = (uint32_t)(read_position_scale * chains[0].anchors[0].query_position);
-		reg0->read_start_position = (uint32_t)(read_position_scale*chains[0].anchors[n_anchors0-1].query_position);
-		reg0->read_end_position = (uint32_t)(read_position_scale * chains[0].anchors[0].query_position);
-		reg0->fragment_start_position = chains[0].strand?(uint32_t)(s->p->ri->seq[chains[0].reference_sequence_index].len+1-chains[0].end_position):chains[0].start_position;
-		reg0->fragment_length = (uint32_t)(chains[0].end_position - chains[0].start_position + 1);
-		reg0->mapq = chains[0].mapq;
-		reg0->rev = chains[0].strand;
-		reg0->mapped = 1; 
-		reg0->tags = strdup(tags.c_str());
-	} else {
-		std::string tags;
-		tags.append("mt:f:" + std::to_string(mapping_time * 1000));
-		tags.append("\tci:i:" + std::to_string(c_count + 1));
-		tags.append("\tsl:i:" + std::to_string(qlen));
-		if (reg0->n_chains >= 1) {
+		mean_chain_score /= reg0->n_chains;
+		if (n_anchors0 > 0 && ((reg0->n_chains >= 2 && (chains[0].score / chains[1].score >= opt->min_bestmap_ratio_out || 
+												chains[0].score >= opt->min_meanmap_ratio_out * mean_chain_score)) ||
+							(reg0->n_chains == 1 && n_anchors0 >= opt->min_chain_anchor_out))) {
 			float anchor_ref_gap_avg_length = 0;
 			float anchor_read_gap_avg_length = 0;
 			for (size_t ai = 0; ai < n_anchors0; ++ai) {
@@ -499,37 +497,80 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 					anchor_read_gap_avg_length += chains[0].anchors[ai].query_position - chains[0].anchors[ai + 1].query_position;
 				}
 			}
-			if(n_anchors0)anchor_ref_gap_avg_length /= n_anchors0;
-			if(n_anchors0)anchor_read_gap_avg_length /= n_anchors0;
+			anchor_ref_gap_avg_length /= n_anchors0;
+			anchor_read_gap_avg_length /= n_anchors0;
+			std::string tags;
+			tags.append("mt:f:" + std::to_string(mapping_time * 1000));
+			tags.append("\tci:i:" + std::to_string(c_count + 1));
+			tags.append("\tsl:i:" + std::to_string(qlen));
 			tags.append("\tcm:i:" + std::to_string(n_anchors0));
 			tags.append("\tnc:i:" + std::to_string(reg0->n_chains));
 			tags.append("\ts1:f:" + std::to_string(chains[0].score));
-			tags.append("\ts2:f:" + std::to_string(reg0->n_chains > 1 ? chains[1].score: 0));
+			tags.append("\ts2:f:" + std::to_string(reg0->n_chains > 1 ? chains[1].score : 0));
 			tags.append("\tsm:f:" + std::to_string(mean_chain_score));
 			tags.append("\tat:f:" + std::to_string((float)anchor_ref_gap_avg_length));
 			tags.append("\taq:f:" + std::to_string((float)anchor_read_gap_avg_length));
-		}else {
-			tags.append("\tcm:i:0");
-			tags.append("\tnc:i:0");
-			tags.append("\ts1:f:0");
-			tags.append("\ts2:f:0");
-			tags.append("\tsm:f:0");
-			tags.append("\tat:f:0");
-			tags.append("\taq:f:0");
-		}
 
-		reg0->read_id = sig->rid;
-		reg0->ref_id = 0;
-		reg0->read_name = sig->name;
-		reg0->read_length = (uint32_t)(read_position_scale * reg0->offset);
-		reg0->read_start_position = 0;
-		reg0->read_end_position = 0;
-		reg0->fragment_start_position = 0;
-		reg0->fragment_length = 0;
-		reg0->mapq = 0;
-		reg0->rev = 0;
-		reg0->mapped = 0;
-		reg0->tags = strdup(tags.c_str());
+			reg0->read_id = sig->rid;
+			reg0->ref_id = chains[0].reference_sequence_index;
+			reg0->read_name = sig->name;
+
+			// TODO: reg0->read_length and reg0->read_end_position is the same
+			reg0->read_length = (uint32_t)(read_position_scale * chains[0].anchors[0].query_position);
+			reg0->read_start_position = (uint32_t)(read_position_scale*chains[0].anchors[n_anchors0-1].query_position);
+			reg0->read_end_position = (uint32_t)(read_position_scale * chains[0].anchors[0].query_position);
+			reg0->fragment_start_position = chains[0].strand?(uint32_t)(s->p->ri->seq[chains[0].reference_sequence_index].len+1-chains[0].end_position):chains[0].start_position;
+			reg0->fragment_length = (uint32_t)(chains[0].end_position - chains[0].start_position + 1);
+			reg0->mapq = chains[0].mapq;
+			reg0->rev = chains[0].strand;
+			reg0->mapped = 1; 
+			reg0->tags = strdup(tags.c_str());
+		} else {
+			std::string tags;
+			tags.append("mt:f:" + std::to_string(mapping_time * 1000));
+			tags.append("\tci:i:" + std::to_string(c_count + 1));
+			tags.append("\tsl:i:" + std::to_string(qlen));
+			if (reg0->n_chains >= 1) {
+				float anchor_ref_gap_avg_length = 0;
+				float anchor_read_gap_avg_length = 0;
+				for (size_t ai = 0; ai < n_anchors0; ++ai) {
+					if (ai < n_anchors0 - 1) {
+						anchor_ref_gap_avg_length += chains[0].anchors[ai].target_position - chains[0].anchors[ai + 1].target_position;
+						anchor_read_gap_avg_length += chains[0].anchors[ai].query_position - chains[0].anchors[ai + 1].query_position;
+					}
+				}
+				if(n_anchors0)anchor_ref_gap_avg_length /= n_anchors0;
+				if(n_anchors0)anchor_read_gap_avg_length /= n_anchors0;
+				tags.append("\tcm:i:" + std::to_string(n_anchors0));
+				tags.append("\tnc:i:" + std::to_string(reg0->n_chains));
+				tags.append("\ts1:f:" + std::to_string(chains[0].score));
+				tags.append("\ts2:f:" + std::to_string(reg0->n_chains > 1 ? chains[1].score: 0));
+				tags.append("\tsm:f:" + std::to_string(mean_chain_score));
+				tags.append("\tat:f:" + std::to_string((float)anchor_ref_gap_avg_length));
+				tags.append("\taq:f:" + std::to_string((float)anchor_read_gap_avg_length));
+			}else {
+				tags.append("\tcm:i:0");
+				tags.append("\tnc:i:0");
+				tags.append("\ts1:f:0");
+				tags.append("\ts2:f:0");
+				tags.append("\tsm:f:0");
+				tags.append("\tat:f:0");
+				tags.append("\taq:f:0");
+			}
+
+			reg0->read_id = sig->rid;
+			reg0->ref_id = 0;
+			reg0->read_name = sig->name;
+			reg0->read_length = (uint32_t)(read_position_scale * reg0->offset);
+			reg0->read_start_position = 0;
+			reg0->read_end_position = 0;
+			reg0->fragment_start_position = 0;
+			reg0->fragment_length = 0;
+			reg0->mapq = 0;
+			reg0->rev = 0;
+			reg0->mapped = 0;
+			reg0->tags = strdup(tags.c_str());
+		}
 	}
 
 	for (uint32_t c_ind = 0; c_ind < reg0->n_chains; ++c_ind){
@@ -672,41 +713,20 @@ static void *map_worker_pipeline(void *shared, int step, void *in)
 		const ri_idx_t *ri = p->ri;
 		for (k = 0; k < s->n_sig; ++k) {
 			if(s->reg[k]){
-
 				ri_reg1_t* reg0 = s->reg[k];
 				char strand = reg0->rev?'-':'+';
 
-				// TODO: (-) strand may have issues, votes are better in (+) strand, check this
-				int map_end_location_on_reference = reg0->fragment_start_position + reg0->fragment_length;
-				int read_start_location_on_reference = map_end_location_on_reference - reg0->read_end_position;
-				std::cout << "Read name: " << reg0->read_name << "\t" << reg0->read_length << std::endl;
-				std::cout << "True read start location:  " << read_start_location_on_reference << std::endl;
+				fprintf(stdout, "%s\t%i\n", reg0->read_name, reg0->on_target);
 
-				// output votes
-				const int max_dist = 1000;
-				std::cout << "Votes" << std::endl;
-				
-				for (int chr = 0; chr < ri->n_seq; chr++) {
-					for (int strand = 0; strand < 2; strand++) {
-						for (auto it = reg0->votes[chr][strand].begin(); it != reg0->votes[chr][strand].end(); it++) {
-							
-							if (abs(((int) it->first) - read_start_location_on_reference) <= max_dist) {
-								std::cout << "Position on reference: " << it->first << ", votes: " << it->second << std::endl;
-							
-							}
-						}
-					}
-				}
-
-				if(reg0->ref_id < ri->n_seq && reg0->read_name){
-					if(reg0->mapped && (!p->su_stop || k < p->su_stop) ){
-						fprintf(stdout, "%s\t%u\t%u\t%u\t%c\t%s\t%u\t%u\t%u\t%u\t%u\t%d\t%s\n", 
-										reg0->read_name, reg0->read_length, reg0->read_start_position, reg0->read_end_position, 
-										strand, ri->seq[reg0->ref_id].name, ri->seq[reg0->ref_id].len, reg0->fragment_start_position, reg0->fragment_start_position + reg0->fragment_length, reg0->read_end_position-reg0->read_start_position-1, reg0->fragment_length, reg0->mapq, reg0->tags);
-					}else{
-						fprintf(stdout, "%s\t%u\t*\t*\t*\t*\t*\t*\t*\t*\t*\t%d\t%s\n", reg0->read_name, reg0->read_length, reg0->mapq, reg0->tags);
-					}
-				}
+				// if(reg0->ref_id < ri->n_seq && reg0->read_name){
+				// 	if(reg0->mapped && (!p->su_stop || k < p->su_stop) ){
+				// 		fprintf(stdout, "%s\t%u\t%u\t%u\t%c\t%s\t%u\t%u\t%u\t%u\t%u\t%d\t%s\n", 
+				// 						reg0->read_name, reg0->read_length, reg0->read_start_position, reg0->read_end_position, 
+				// 						strand, ri->seq[reg0->ref_id].name, ri->seq[reg0->ref_id].len, reg0->fragment_start_position, reg0->fragment_start_position + reg0->fragment_length, reg0->read_end_position-reg0->read_start_position-1, reg0->fragment_length, reg0->mapq, reg0->tags);
+				// 	}else{
+				// 		fprintf(stdout, "%s\t%u\t*\t*\t*\t*\t*\t*\t*\t*\t*\t%d\t%s\n", reg0->read_name, reg0->read_length, reg0->mapq, reg0->tags);
+				// 	}
+				// }
 
 				if(reg0->tags) free(reg0->tags);
 				free(reg0);

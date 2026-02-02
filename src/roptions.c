@@ -52,6 +52,12 @@ void ri_mapopt_init(ri_mapopt_t *opt)
 	opt->ttest_freq = 500;
 	opt->tmin_reads = 500;
 
+	opt->mode = 0; // toggle between 0) exact seed-and-vote and 1) D-SOFT like bins
+	opt->enable_chaining = 0; // TODO: current workflow requires commenting the statements inside if blocks due to compile errors
+	opt->bin_size = 500;
+	opt->h_bins = 70;
+	opt->h_votes = 12;
+
 	//TODO: RNA values:
 	// opt->window_length1 = 7,
 	// opt->window_length2 = 14,
