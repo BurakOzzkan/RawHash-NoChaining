@@ -18,6 +18,7 @@ test/data/*/slurm-*
 test/evaluation/*/*/slurm*.out
 test/evaluation/*/*/*.paf
 test/evaluation/*/*/rawhash
+test/evaluation/*/*/rawhash_*
 test/evaluation/*/*/uncalled
 test/evaluation/*/*/*.abundance
 test/evaluation/*/*/*/slurm*.out
