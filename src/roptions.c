@@ -52,10 +52,11 @@ void ri_mapopt_init(ri_mapopt_t *opt)
 	opt->ttest_freq = 500;
 	opt->tmin_reads = 500;
 
-	opt->mode = 2; // toggle between 0) exact seed-and-vote, 1) D-SOFT like bins, and 2) disable
-	opt->bin_size = 500;
-	opt->h_bins = 70;
-	opt->h_votes = 12;
+	// Toggle between 0) exact seed-and-vote, 1) D-SOFT like bins, and 2) nothing. Use make CHAINING=0 to disable chaining.
+	opt->mode = 1;
+	opt->consensus_threshold = 0.018;
+	opt->bin_size = 128;
+	opt->h_bins = 50;
 
 	//TODO: RNA values:
 	// opt->window_length1 = 7,

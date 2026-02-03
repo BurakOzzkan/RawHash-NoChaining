@@ -7,6 +7,13 @@ else
 	CPPFLAGS=-std=c++11 -Wall -O3 -fopenmp -march=native -DHAVE_KALLOC
 endif
 
+#pass CHAINING=0 to make to disable chaining
+CHAINING ?= 1
+ifeq ($(CHAINING),1)
+	CFLAGS+=-DCHAINING=1
+	CPPFLAGS+=-DCHAINING=1
+endif
+
 #pass PROFILE=1 to make to enable profiling
 ifdef PROFILE
 	CFLAGS+=-DPROFILERH=1

@@ -8,6 +8,7 @@
 #include <algorithm> //for sort
 #include <cstdint>
 #include <cstdio>
+#include <stdio.h>
 
 #ifdef PROFILERH
 double ri_filereadtime = 0.0;
@@ -161,7 +162,8 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 	#ifdef PROFILERH
 	double chain_t = ri_realtime();
 	#endif
-	
+	uint32_t mask = (1ULL<<31)-1;
+#ifdef CHAINING
 	// Chaining parameters
 	int max_gap_length = opt->max_gap_length;
 	int max_target_gap_length = opt->max_target_gap_length;
@@ -170,8 +172,6 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 	int min_num_anchors = opt->min_num_anchors;
 	int num_best_chains = opt->num_best_chains;
 	float min_chaining_score = opt->min_chaining_score;
-
-	uint32_t mask = (1ULL<<31)-1;
 
 	// rh_kvec_t(ri_anchor_t)* anchors_fr[2] = {0};
 	// rh_kvec_t(ri_anchor_t)* anchors_f = anchors_fr;
@@ -208,6 +208,7 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 		for(uint32_t i = 0; i < reg->n_chains; ++i) if(reg->chains[i].anchors) ri_kfree(km, reg->chains[i].anchors);
 		ri_kfree(km, reg->chains); reg->n_chains = 0;
 	}
+#endif
 
 	#ifdef PROFILERH
 	ri_chaintime += ri_realtime() - chain_t;
@@ -231,9 +232,9 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 	double seed_t = ri_realtime();
 	#endif
 
-	// TODO: may have issues with fragments (threading) and sorting
 	// TODO: (-) strand may have issues, votes are better in (+) strand, check this
 	int Nb = ri->seq[reg->ref_id].len / opt->bin_size + 1;
+	int h_votes = (int)(riv.n * opt->consensus_threshold);
 	for (i = 0; i < riv.n; ++i) {
 		hashVal = riv.a[i].x>>RI_HASH_SHIFT;
 		pi = (uint32_t)riv.a[i].y>>RI_POS_SHIFT;
@@ -250,7 +251,7 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 			
 			if (opt->mode == 0) {
 				reg->votes[t_ind][strand][target_signal_position - (pi + q_offset)]++;
-				if (reg->votes[t_ind][strand][target_signal_position - (pi + q_offset)] >= opt->h_votes) reg->on_target = 1;
+				if (reg->votes[t_ind][strand][target_signal_position - (pi + q_offset)] >= h_votes) reg->on_target = 1;
 			} else if (opt->mode == 1) {
 				uint32_t bin; // bins are calculated based on the start position of the read on the reference genome
 				if (target_signal_position < pi + q_offset) bin = 0;
@@ -265,9 +266,14 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 				if (reg->bp_counts[t_ind][strand][bin] >= opt->h_bins) reg->on_target = 1;
 			}
 
+			if (reg->on_target) break;
+
+#ifdef CHAINING
 			anchors_fr[(keyval&1)][t_ind].emplace_back(ri_anchor_t{target_signal_position,  pi + q_offset});
+#endif
 			// rh_kv_push(ri_anchor_t, 0, anchors_fr[(keyval&1)][t_ind], ri_anchor_t{target_signal_position, pi + q_offset})
 		}
+		if (reg->on_target) break;
 	}
 
 	ri_kfree(km, riv.a);
@@ -280,6 +286,7 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 	chain_t = ri_realtime();
 	#endif
 
+#ifdef CHAINING
 	// Sort the anchors based on their occurrence on target signal
 	for (size_t t_ind = 0; t_ind < n_seq; ++t_ind) {
 		// std::sort(anchors_f[t_ind].a, anchors_f[t_ind].a + anchors_f[t_ind].n);
@@ -378,6 +385,7 @@ void gen_chains(void *km, const ri_idx_t *ri, const float* sig, const uint32_t l
 		reg->chains = (ri_chain_t*)ri_kmalloc(km, chains.size()*sizeof(ri_chain_t));
 		std::copy(chains.begin(), chains.end(), reg->chains);
 	}
+#endif
 
 	#ifdef PROFILERH
 	ri_chaintime += ri_realtime() - chain_t;
@@ -423,7 +431,7 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 	int Nb = s->p->ri->seq[reg0->ref_id].len / opt->bin_size + 1;
 	if (opt->mode == 0) {
 		// votes
-		reg0->votes = std::vector<std::vector<std::map<uint32_t, uint32_t>>>(s->p->ri->n_seq, std::vector<std::map<uint32_t, uint32_t>>(2));
+		reg0->votes = std::vector<std::vector<std::unordered_map<uint32_t, uint32_t>>>(s->p->ri->n_seq, std::vector<std::unordered_map<uint32_t, uint32_t>>(2));
 	} else if (opt->mode == 1) {
 		// bins
 		reg0->bp_counts = std::vector<std::vector<std::vector<uint32_t>>>(s->p->ri->n_seq, std::vector<std::vector<uint32_t>>(2, std::vector<uint32_t>(Nb, 0)));
@@ -443,11 +451,13 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 
 		ri_map_frag(s->p->ri, (const uint32_t)s_qe-s_qs, (const float*)&(sig->sig[s_qs]), reg0, b, opt, sig->name);
 		
+		if (reg0->on_target) break; // early exit
+#ifdef CHAINING
 		if (reg0->n_chains >= 2) {
 			if (reg0->chains[0].score / reg0->chains[1].score >= opt->min_bestmap_ratio) break;
 
 			float mean_chain_score = 0;
-			for (uint32_t c_ind = 0; c_ind < reg0->n_chains; ++c_ind)
+			for (uint32_t c_ind = 0; c_ind < (uint32_t)reg0->n_chains; ++c_ind)
 				mean_chain_score += reg0->chains[c_ind].score;
 
 			mean_chain_score /= reg0->n_chains;
@@ -455,6 +465,7 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 		} else if (reg0->n_chains == 1 && reg0->chains[0].n_anchors >= opt->min_chain_anchor){
 			break;
 		}
+#endif
 	} double mapping_time = ri_realtime() - t;
 
 	#ifdef PROFILERH
@@ -465,7 +476,8 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 
 	float read_position_scale = ((float)(c_count+1)*l_chunk/reg0->offset) / ((float)opt->sample_rate/opt->bp_per_sec);
 	// Save results in vector and output PAF
-	
+	reg0->read_name = sig->name;
+#ifdef CHAINING
 	ri_chain_s* chains = reg0->chains;
 
 	if(!chains) {reg0->n_chains = 0;}
@@ -561,6 +573,7 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 		reg0->mapped = 0;
 		reg0->tags = strdup(tags.c_str());
 	}
+#endif
 
 	for (uint32_t c_ind = 0; c_ind < reg0->n_chains; ++c_ind){
 			if(reg0->chains[c_ind].anchors) ri_kfree(b->km, reg0->chains[c_ind].anchors);
@@ -705,18 +718,29 @@ static void *map_worker_pipeline(void *shared, int step, void *in)
 				ri_reg1_t* reg0 = s->reg[k];
 				char strand = reg0->rev?'-':'+';
 
-				fprintf(stdout, "%s\t%i\n", reg0->read_name, reg0->on_target);
+				if (p->opt->mode == 0 || p->opt->mode == 1) {
+					fprintf(stdout, "%s\t%i\n", reg0->read_name, reg0->on_target);
+				}
+				
+			#ifdef CHAINING
+				if(reg0->ref_id < ri->n_seq && reg0->read_name){
+					if(reg0->mapped && (!p->su_stop || k < p->su_stop) ){
+						fprintf(stdout, "%s\t%u\t%u\t%u\t%c\t%s\t%u\t%u\t%u\t%u\t%u\t%d\t%s\n", 
+										reg0->read_name, reg0->read_length, reg0->read_start_position, reg0->read_end_position, 
+										strand, ri->seq[reg0->ref_id].name, ri->seq[reg0->ref_id].len, reg0->fragment_start_position, reg0->fragment_start_position + reg0->fragment_length, reg0->read_end_position-reg0->read_start_position-1, reg0->fragment_length, reg0->mapq, reg0->tags);
+					}else{
+						fprintf(stdout, "%s\t%u\t*\t*\t*\t*\t*\t*\t*\t*\t*\t%d\t%s\n", reg0->read_name, reg0->read_length, reg0->mapq, reg0->tags);
+					}
+				}
+			#endif
 
-				// if(reg0->ref_id < ri->n_seq && reg0->read_name){
-				// 	if(reg0->mapped && (!p->su_stop || k < p->su_stop) ){
-				// 		fprintf(stdout, "%s\t%u\t%u\t%u\t%c\t%s\t%u\t%u\t%u\t%u\t%u\t%d\t%s\n", 
-				// 						reg0->read_name, reg0->read_length, reg0->read_start_position, reg0->read_end_position, 
-				// 						strand, ri->seq[reg0->ref_id].name, ri->seq[reg0->ref_id].len, reg0->fragment_start_position, reg0->fragment_start_position + reg0->fragment_length, reg0->read_end_position-reg0->read_start_position-1, reg0->fragment_length, reg0->mapq, reg0->tags);
-				// 	}else{
-				// 		fprintf(stdout, "%s\t%u\t*\t*\t*\t*\t*\t*\t*\t*\t*\t%d\t%s\n", reg0->read_name, reg0->read_length, reg0->mapq, reg0->tags);
-				// 	}
-				// }
-
+				// destroy vectors before freeing the struct memory to prevent memory leak
+				if (p->opt->mode == 0) {
+					reg0->votes.~vector();
+				} else if (p->opt->mode == 1) {
+					reg0->bp_counts.~vector();
+					reg0->last_hit_pos.~vector();
+				}
 				if(reg0->tags) free(reg0->tags);
 				free(reg0);
 			}

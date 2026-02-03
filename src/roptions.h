@@ -69,7 +69,7 @@ typedef struct ri_mapopt_s{
 	uint32_t mode; // toggle between 0) exact seed-and-vote, 1) D-SOFT like bins, and 2) disable
 	int bin_size;
 	int h_bins;
-	int h_votes;
+	double consensus_threshold;
 } ri_mapopt_t;
 
 /**
