@@ -58,8 +58,8 @@ typedef struct ri_reg1_s{
 
 	uint32_t on_target;
 	std::vector<std::vector<std::unordered_map<uint32_t, uint32_t>>> votes; // votes[chr_index][strand] = map{pos, X votes}
-	std::vector<std::vector<std::vector<uint32_t>>> bp_counts; // bp_counts[chr_index][strand][bin] = X unique bases
-	std::vector<std::vector<std::vector<int>>> last_hit_pos; // last_hit_pos[chr_index][strand][bin]
+	int*** bp_counts; // bp_counts[chr_index][strand][bin] = X unique bases
+	int*** last_hit_pos; // last_hit_pos[chr_index][strand][bin]
 
 	uint32_t offset;
 

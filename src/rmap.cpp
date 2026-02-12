@@ -434,8 +434,23 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 		reg0->votes = std::vector<std::vector<std::unordered_map<uint32_t, uint32_t>>>(s->p->ri->n_seq, std::vector<std::unordered_map<uint32_t, uint32_t>>(2));
 	} else if (opt->mode == 1) {
 		// bins
-		reg0->bp_counts = std::vector<std::vector<std::vector<uint32_t>>>(s->p->ri->n_seq, std::vector<std::vector<uint32_t>>(2, std::vector<uint32_t>(Nb, 0)));
-		reg0->last_hit_pos = std::vector<std::vector<std::vector<int>>>(s->p->ri->n_seq, std::vector<std::vector<int>>(2, std::vector<int>(Nb, -(s->p->ri->k))));
+		// manual memory allocation for last_hit_pos and bp_counts
+		reg0->last_hit_pos = (int***)calloc(s->p->ri->n_seq, sizeof(int**));
+		reg0->bp_counts = (int***)calloc(s->p->ri->n_seq, sizeof(int**));
+		for (uint32_t i = 0; i < s->p->ri->n_seq; ++i) {
+
+			reg0->last_hit_pos[i] = (int**)calloc(2, sizeof(int*));
+			reg0->bp_counts[i] = (int**)calloc(2, sizeof(int*));
+			for (uint32_t j = 0; j < 2; ++j) {
+
+				reg0->last_hit_pos[i][j] = (int*)calloc(Nb, sizeof(int));
+				reg0->bp_counts[i][j] = (int*)calloc(Nb, sizeof(int));
+				for (uint32_t k = 0; k < Nb; ++k) {
+					reg0->last_hit_pos[i][j][k] = -(s->p->ri->k);
+				}
+
+			}
+		}
 	}
 	uint32_t l_chunk = opt->chunk_size;
 	uint32_t max_chunk =  opt->max_num_chunk;
@@ -452,7 +467,7 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 		ri_map_frag(s->p->ri, (const uint32_t)s_qe-s_qs, (const float*)&(sig->sig[s_qs]), reg0, b, opt, sig->name);
 		
 		if (reg0->on_target) break; // early exit
-#ifdef CHAINING
+		#ifdef CHAINING
 		if (reg0->n_chains >= 2) {
 			if (reg0->chains[0].score / reg0->chains[1].score >= opt->min_bestmap_ratio) break;
 
@@ -465,7 +480,7 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 		} else if (reg0->n_chains == 1 && reg0->chains[0].n_anchors >= opt->min_chain_anchor){
 			break;
 		}
-#endif
+		#endif
 	} double mapping_time = ri_realtime() - t;
 
 	#ifdef PROFILERH
@@ -477,7 +492,7 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 	float read_position_scale = ((float)(c_count+1)*l_chunk/reg0->offset) / ((float)opt->sample_rate/opt->bp_per_sec);
 	// Save results in vector and output PAF
 	reg0->read_name = sig->name;
-#ifdef CHAINING
+	#ifdef CHAINING
 	ri_chain_s* chains = reg0->chains;
 
 	if(!chains) {reg0->n_chains = 0;}
@@ -573,7 +588,19 @@ static void map_worker_for(void *_data, long i, int tid) // kt_for() callback
 		reg0->mapped = 0;
 		reg0->tags = strdup(tags.c_str());
 	}
-#endif
+	#endif
+
+	// Free memory for bp_counts and last_hit_pos
+	for (uint32_t i = 0; i < s->p->ri->n_seq; ++i) {
+		for (uint32_t j = 0; j < 2; ++j) {
+			free(reg0->last_hit_pos[i][j]);
+			free(reg0->bp_counts[i][j]);
+		}
+		free(reg0->last_hit_pos[i]);
+		free(reg0->bp_counts[i]);
+	}
+	free(reg0->last_hit_pos);
+	free(reg0->bp_counts);
 
 	for (uint32_t c_ind = 0; c_ind < reg0->n_chains; ++c_ind){
 			if(reg0->chains[c_ind].anchors) ri_kfree(b->km, reg0->chains[c_ind].anchors);
@@ -722,7 +749,7 @@ static void *map_worker_pipeline(void *shared, int step, void *in)
 					fprintf(stdout, "%s\t%i\n", reg0->read_name, reg0->on_target);
 				}
 				
-			#ifdef CHAINING
+				#ifdef CHAINING
 				if(reg0->ref_id < ri->n_seq && reg0->read_name){
 					if(reg0->mapped && (!p->su_stop || k < p->su_stop) ){
 						fprintf(stdout, "%s\t%u\t%u\t%u\t%c\t%s\t%u\t%u\t%u\t%u\t%u\t%d\t%s\n", 
@@ -732,15 +759,8 @@ static void *map_worker_pipeline(void *shared, int step, void *in)
 						fprintf(stdout, "%s\t%u\t*\t*\t*\t*\t*\t*\t*\t*\t*\t%d\t%s\n", reg0->read_name, reg0->read_length, reg0->mapq, reg0->tags);
 					}
 				}
-			#endif
+				#endif
 
-				// destroy vectors before freeing the struct memory to prevent memory leak
-				if (p->opt->mode == 0) {
-					reg0->votes.~vector();
-				} else if (p->opt->mode == 1) {
-					reg0->bp_counts.~vector();
-					reg0->last_hit_pos.~vector();
-				}
 				if(reg0->tags) free(reg0->tags);
 				free(reg0);
 			}
